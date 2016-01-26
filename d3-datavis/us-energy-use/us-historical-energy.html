@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>US Historical Energy Consumption</title>
+    <script type="text/javascript" src="http://d3js.org/d3.v3.min.js"></script>
+    <script type="text/javascript" src="http://code.jquery.com/jquery-1.8.3.min.js"></script>
+	
+	<style type="text/css">
+	#chart { border: 1px gray; font-size: 11px;
+			 font-family: "Avant Garde", Avantgarde, "Century Gothic", CenturyGothic, "AppleGothic", sans-serif; }
+	#chart, #play { width: 960px; margin:0 auto; }	
+	
+	.playRect { fill: gray; opacity:.9; }
+	.playText { fill:white; font-size: 35px; }
+	.playGroup { cursor: pointer; }
+						
+	.axis path, line { stroke: #000; fill:none; shape-rendering: crispEdges;}
+	line.tick { stroke: #cccccc; opacity:.4; }
+	.arc path { stroke: #fff; }
+	.y.label { font-size: 13px; }
+	
+	.donutAmount { font-size:11px; font-weight: bold; stroke: none; fill:white; opacity:.9}
+	.donutLabel { fill:gray; }
+	.yearDisplay { font-size: 4.5em; fill: gray; stoke:black; opacity:.2; }
+	
+	.underlay { visibility: hidden; pointer-events:all; }
+	.underlay rect { fill:gray; opacity:.3; }
+	
+	.endingGroup { cursor: pointer; }
+	.endText { fill:white; font-size: 16px; }
+	.endRect { fill: gray; opacity: .8; }
+	</style>
+</head>
+
+<body>
+<div id="play">
+</div>
+
+<div id="chart">
+</div>
+
+<script type="text/javascript">
+// global variables
+var margin = {t:20, r:20, b:20, l:30 },
+		w = 950
+		w1 = 620 - margin.l - margin.r,
+		w2 = 300 - margin.r,
+		h = 350 - margin.t - margin.b,
+		// clamp x scale because there is more data available than we want
+		// to show as animation is running
+		x = d3.time.scale().range([0, w1]).clamp(true),
+		y = d3.scale.linear().range([h, 0]).domain([0, 110]),
+		// custom color scale
+		color = d3.scale.ordinal().range(["#37A36A", "#3A5A64", "#DABD49", "#C78739", "#8AB8D9", "#A81F5E"]),
+		formatTime = d3.time.format("%Y").parse;
+
+var	dataChange,
+		latest,
+		data,
+		donut;
+
+// SVG rect that will be used as button to start animation
+var playBox = d3.select('#play').append("svg")
+    .attr("width", w)
+    .attr("height", h)
+
+playGroup = playBox.append("g")
+	.attr("class", "playGroup")
+	.attr("transform", "translate(" + (w - 350) + "," + (h/2) + ")")
+
+playGroup.append("rect")
+	.attr("class", "playRect")
+	.attr({
+		width: 250,
+		height: 80,
+		rx: 15,
+		ry:15
+		});
+		
+playGroup.append("text")
+	.attr("class", "playText")
+	.attr("text-anchor", "middle")
+	.attr("dy", 50)
+	.attr("x", 125)
+	.text("See the visual");
+
+// start the animation on click	
+playGroup.on("click", playStart)
+
+function playStart() { 
+	playBox.transition().duration(300)
+	.style("opacity", "1e-6")
+	.remove()
+	
+	setTimeout(400, play()) 
+};
+
+function play() {
+
+// settings for stacked area chart
+var stacked = d3.select("#chart").append("svg")
+		.attr("class", "stackWrapper")
+		.attr("width", w1 + margin.l + margin.r)
+		.attr("height", h + margin.t + margin.b)
+	.append("g")
+		.attr("transform", "translate(" + margin.l + "," + margin.t + ")");
+
+var xAxis = d3.svg.axis()
+		.scale(x)
+		.tickSubdivide(true)
+		.orient("bottom");
+	stacked.append("g")
+		.attr("class", "x axis")
+		.attr("transform", "translate(0," + h + ")")
+
+// setup and bring in y axis		
+var yAxis = d3.svg.axis()
+		.scale(y)
+		.tickSubdivide(true)
+		.tickSize(-w1, 0, 0)
+		.orient("left");
+
+stacked.append("g")
+		.attr("class", "y axis")
+		.call(yAxis);
+		
+var stack = d3.layout.stack()
+		.values(function(d) { return d.values; });
+
+var area = d3.svg.area().interpolate("cardinal")
+		.x(function(d) { return x(d.year); })
+		.y0(function(d) { return y(d.y0); })
+		.y1(function(d) { return y(d.y + d.y0); })
+		
+// settings for donut chart		
+var radius = Math.min((w2), h) / 2,
+		labelRadius = radius;
+
+var krispy = d3.select("#chart").append("svg")
+		.attr("width", w2 + margin.r + margin.l)
+		.attr("height", h + margin.t + margin.b)
+  .append("g")
+		.attr("transform", "translate(150," + (h/2 + margin.t) + ")");
+		
+var arc = d3.svg.arc()
+		.outerRadius(radius - 15)
+		.innerRadius(radius - 55);
+			
+var pie = d3.layout.pie()
+		.sort(null)
+		.value(function(d) { return d.values; });
+
+// bring in the data
+d3.csv("us-historical-energy.csv", function(csv) {	
+	// data variable that will be used throughout
+	data = csv;
+	
+	// format dates
+	data.forEach(function(d) { 
+		d.Year = formatTime(d.Year);
+	});
+
+	// function for adding data points one at a time
+	var latest = 1;
+	
+	function update() {
+		// create array that will update with each new data point
+		dataChange = csv.slice(0, latest)
+		latest++;
+		if (latest < csv.length + 2) {
+		
+		// reset x domain and re-call() x axis
+		x.domain([dataChange[0].Year, dataChange[dataChange.length - 1].Year])
+		d3.selectAll(".x.axis").transition(stacked).duration(600).call(xAxis);
+		
+		// call redraw function draws the meat of the charts
+		redraw();
+		
+		// stop updating and bring "play again" button when animation is done
+		} else if (latest === csv.length + 2) {
+			clearInterval(interval);
+			setTimeout(ending, 400);
+		};
+	};
+	// update data every 600ms
+	var interval = setInterval(update, 600);
+	
+	// create list of energy sources to be used as keys
+	color.domain(d3.keys(data[0]).filter(function(key) { return key !== "Year" && key !== "sourcesPie"; }))
+	var stackGroup = stacked.append("g").attr("class", "stackGroup")
+	var underlayGroup = stacked.append("g").attr("class", "underlayGroup")
+	
+	// create legend
+	var legend = stacked.append("g")
+				.attr("class", "legendBox")
+
+	var legends = legend.selectAll(".legend")
+			.data(color.domain())
+		.enter().append("g")
+			.attr("class", "legend")
+			.attr("transform", function(d, i) { return "translate(10," + (5 + (i * 20)) + ")"; });
+			
+		legends.append("rect")
+			.attr("width", 15)
+			.attr("height", 15)
+			.style("fill", color)
+
+		legends.append("text")
+			.attr("x", 20)
+			.attr("y", 8)
+			.attr("dy", ".35em")
+			.text(function(d) { return d; });
+	
+		// add y axis label
+		stacked.append("text")
+			.attr("class", "y label")
+			.attr("text-anchor", "end")
+			.attr("x", 160 - h)
+			.attr("y", 10)
+			.attr("dy", ".75em")
+			.attr("transform", "rotate(-90)")
+			.text("Quadrillion BTUs (Quads)");
+		
+		// label units on donut
+		krispy.append("text")
+			.attr("class", "donutLabel")
+			.attr("text-anchor", "end")
+			.attr("x", 45)
+			.attr("y", 20)
+			.attr("dy", ".75em")
+			.text("(Values in Quads)");
+
+// draw the charts in redraw function		
+function redraw() {
+
+	// map values to d3.layout.stack() for the area chart
+	var sourcesStack = stack(color.domain().map(function(name) {
+		return {
+		name: name,
+		values: data.map(function(d) { 
+			return { year: d.Year, y: +d[name] };
+			})
+		};
+	}));
+
+	// set energy sources data for stacked areas
+	var stacks = stackGroup.selectAll(".sources")
+		.data(sourcesStack);
+
+	// call enter() for stacked areas
+	var stacksEnter = stacks.enter().append("g")
+			.attr("class", "sources");
+
+	// draw paths and areas
+	stacksEnter.append("path")
+		.attr("class", "area")
+		.attr("d", function(d) { return area(d.values); })
+		.style("fill", function(d) { return color(d.name); })
+
+	// update and transition area values
+	var stacksUpdate = d3.transition(stacks)
+
+	stacksUpdate.transition().select("path").duration(600)
+		.attr("d", function(d) { return area(d.values); });
+
+	// create rect underlays that will be used for mouseovers
+	var underlay = underlayGroup.selectAll(".underlay").data(dataChange);
+	var underlayWidth = w1/dataChange.length;
+
+	// enter() underlay group and append rects
+	var underlayEnter = underlay.enter().append("g")
+		.attr("class", "underlay");
+
+	underlayEnter.append("rect")
+		.attr("x", function(d, i) { return x(d.Year) - underlayWidth/2; })
+		.attr("width", underlayWidth)
+		.attr("y", 0)
+		.attr("height", h);
+		
+	// update and move underlays; auto-reduce width to chart width / data length
+	var underlayUpdate = d3.transition(underlay);
+		
+	underlayUpdate.transition().selectAll("rect").duration(600)
+		.attr("x", function(d, i) { return x(d.Year) - underlayWidth/2; })
+		.attr("width", underlayWidth);
+
+	// what to do when we mouse on or off a rect
+	underlay.on("mouseover", rectOn)
+	underlay.on("mouseout", rectOff)
+
+	//draw the donut chart
+	drawDonut(dataChange);
+};
+
+// function for drawing and updating the non-mouseover donut
+function drawDonut(section) { 
+
+	// map values to color.domain key
+	section.forEach(function(d) {
+		d.sourcesPie = color.domain().map(function(name) {
+			return {name: name, values: +d[name], year: d.Year};
+		});
+	});
+	
+	// find index of current data point
+	var newIndex = data.indexOf(section[section.length - 1])
+
+	// set data for current data point
+	var donut = krispy.selectAll(".arc")
+		.data(pie(data[newIndex].sourcesPie))
+
+	// enter() the donut group
+	var donutEnter = donut.enter().append("g")
+		.attr("class", "arc")
+		
+	// draw donut arcs
+	donutEnter.append("path")
+		.attr("class", "donutPath")
+		.attr("d", arc)
+		.each(function(d) { this._current = d; })
+		.style("fill-opacity", function(d) {return d.value==0 ? 1e-6 : 1;})
+		.style("fill", function(d) { return color(d.data.name); })
+
+	// draw value labels inside arcs	
+	donutEnter.append("text")
+		.attr("class", "donutAmount")
+		.attr("transform", function(d) {
+			return "translate(" + arc.centroid(d) + ")rotate(" + angle(d) + ")"; })
+		.attr("dy", ".35em")
+		.attr("text-anchor", "middle")
+		.style("fill-opacity", function(d) {return d.value==0 ? 1e-6 : 1;})
+		.text(function(d) { return d3.round(d.data.values, 2) });
+		
+	// update and transition arcs and labels	
+	var donutUpdate = d3.transition(donut);
+		
+	donutUpdate.transition().select(".donutAmount").duration(600)
+		.attr("transform", function(d) {
+			return "translate(" + arc.centroid(d) + ")rotate(" + angle(d) + ")"; }) 
+		.style("fill-opacity", function(d) {return d.value==0 ? 1e-6 : 1;})
+		.text(function(d) { return d3.round(d.data.values, 2) });
+			
+	donutUpdate.transition().select("path").duration(600)
+		.style("fill-opacity", function(d) {return d.value==0 ? 1e-6 : 1;})
+		.attrTween("d", arcTween)
+	
+	// display the year for the current data point
+	var yearDisplay = krispy.selectAll(".yearDisplay")
+		.data(pie(data[newIndex].sourcesPie))
+		
+	var	yearDisplayEnter = donut.enter().append("text")
+		.attr("class", "yearDisplay")
+		.attr("transform", "translate(" + (-margin.r - margin.l - 5) + "," + 10 + ")")
+		.text(function(d) { return +d.data.year.getFullYear() });
+		
+	d3.selectAll(".yearDisplay").transition().duration(0)
+		.text(function(d) { return +d.data.year.getFullYear() })
+	
+	// angle function used for rotating labels		
+	function angle(d) {
+		var a = (d.startAngle + d.endAngle) * 90 / Math.PI - 90;
+		return a > 90 ? a - 180 : a;
+	}
+	
+	// for smoothly updating arcs
+	function arcTween(a) {
+		var i = d3.interpolate(this._current, a);
+		this._current = i(0);
+			return function(t) {
+			return arc(i(t));
+		};
+	}
+};
+
+// helper functions
+
+// what happens when we go on or off of a rect
+var rectOn = function() {
+	var hoverRect = d3.select(this)
+	hoverRect.style("visibility", "visible")
+		
+	var hoverYear = hoverRect.datum()
+	var findYear = csv.indexOf(hoverYear)
+	var setYear = (findYear > 0) 
+		? (setYear = csv.slice(0, findYear + 1)) 
+		: (setYear = [dataChange[0]]);
+	
+	drawDonut(setYear);
+	}
+
+var rectOff = function() {
+	var hoverRect = d3.select(this)
+	hoverRect.style("visibility", "hidden");
+	
+	drawDonut(dataChange);
+	}
+
+// stop animation when we roll over stacked area chart, restart when leaving
+$('.stackWrapper').hover(function() {
+		clearInterval(interval);
+		},
+		function() {
+		 interval = setInterval(update, 600);
+		});
+});
+
+// what happens when animation reaches the end
+function ending() {
+
+	endingGroup = krispy.append("g")
+		.attr("class", "endingGroup")
+		.attr("transform", "translate(90,120)")
+		
+	endingGroup.append("rect")
+		.attr("class", "endRect")
+		.attr({
+			width: 70,
+			height: 30,
+			rx: 10,
+			ry:10
+			});
+			
+	endingGroup.append("text")
+		.attr("class", "endText")
+		.attr("text-anchor", "middle")
+		.attr("dy", 21)
+		.attr("dx", 35)
+		.text("Again?");
+
+	endingGroup.on("click", playAgain)
+	 }
+
+// Play it Again, Sam
+function playAgain() {
+		d3.selectAll("svg").transition().duration(600).style("opacity", "1e-6").remove()
+		setTimeout(play, 650)
+	};
+};
+</script>
+</body>
+</html>
